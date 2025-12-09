@@ -38,7 +38,7 @@ class LogisticRecallModel:
         Returns:
             Feature matrix of shape (num_items, 4)
         """
-        return state
+        return state1
     
     def train(self, train_data: pd.DataFrame):
         """

@@ -42,7 +42,7 @@ class BanditAgent:
         # Mapping from item_id to arm (difficulty group)
         self.item_to_arm: Dict[int, int] = {}
         
-        # Reverse mapping: arm to list of items
+        # Reverse mapping: arm → list of items
         self.arm_to_items: Dict[int, List[int]] = {i: [] for i in range(num_arms)}
     
     def assign_items_to_arms(self, state: np.ndarray, available_items: np.ndarray):
@@ -53,21 +53,18 @@ class BanditAgent:
             state: State matrix of shape (num_items, 4)
             available_items: Array of available item IDs
         """
-        # Use historical_accuracy (column 3) to determine difficulty
+        # Use historical_accuracy (column 3)
         accuracies = state[:, 3]
         
-        # Create difficulty buckets
-        # Lower accuracy = harder = higher arm index
         if len(available_items) > 0:
             item_accuracies = accuracies[available_items]
             
-            # Assign to arms based on accuracy percentiles
+            # Assign per available item
             for item_id in available_items:
                 if item_id not in self.item_to_arm:
                     accuracy = accuracies[item_id]
-                    
-                    # Map accuracy to arm (0 = easiest, num_arms-1 = hardest)
-                    # Items with higher accuracy go to lower arm indices
+
+                    # Harder items → higher arm index
                     arm = int((1.0 - accuracy) * self.num_arms)
                     arm = max(0, min(self.num_arms - 1, arm))
                     
@@ -75,68 +72,41 @@ class BanditAgent:
                     self.arm_to_items[arm].append(item_id)
     
     def select_arm(self) -> int:
-        """
-        Select arm using epsilon-greedy policy.
-        
-        Returns:
-            Selected arm index
-        """
+        """Epsilon-greedy arm selection."""
         if np.random.random() < self.epsilon:
-            # Explore: random arm
             return np.random.randint(self.num_arms)
         else:
-            # Exploit: arm with highest Q-value
             return np.argmax(self.q_values)
     
     def select_action(self, state: np.ndarray, available_items: np.ndarray) -> int:
         """
-        Select item to review.
-        First selects a difficulty arm, then picks a random item from that arm.
-        
-        Args:
-            state: Current state matrix
-            available_items: Available item IDs
-        
-        Returns:
-            Selected item ID
+        Select item to review: choose arm → choose random item from that arm.
         """
-        # Assign items to arms if needed
         self.assign_items_to_arms(state, available_items)
         
-        # Select arm
         selected_arm = self.select_arm()
         
-        # Get items in this arm
         arm_items = [item for item in self.arm_to_items[selected_arm] 
-                    if item in available_items]
+                     if item in available_items]
         
-        # If no items in selected arm, fall back to random from available
         if len(arm_items) == 0:
             return np.random.choice(available_items)
         
-        # Select random item from the arm
         return np.random.choice(arm_items)
     
     def update(self, arm: int, reward: float):
         """
-        Update Q-value for the selected arm using incremental update.
-        
-        Args:
-            arm: Arm that was selected
-            reward: Reward received (+1 for correct, -1 for incorrect)
+        Q-value update: Q(a) ← Q(a) + α(R − Q(a))
         """
         self.arm_counts[arm] += 1
-        
-        # Incremental Q-value update: Q(a) = Q(a) + alpha * (R - Q(a))
         self.q_values[arm] += self.learning_rate * (reward - self.q_values[arm])
     
     def get_arm_for_item(self, item_id: int) -> int:
-        """Get the arm (difficulty group) for an item."""
+        """Return arm of an item."""
         return self.item_to_arm.get(item_id, 0)
     
     def reset(self):
-        """Reset agent state (but keep learned Q-values)."""
-        # Keep Q-values and counts for online learning
+        """Keep Q-values but reset any episodic internal state."""
         pass
 
 
@@ -144,16 +114,6 @@ def train_bandit_agent(env, num_episodes: int = 50, num_arms: int = 10,
                       epsilon: float = 0.1, learning_rate: float = 0.1):
     """
     Train and evaluate bandit agent.
-    
-    Args:
-        env: MemoryEnv instance
-        num_episodes: Number of training episodes
-        num_arms: Number of difficulty groups
-        epsilon: Exploration rate
-        learning_rate: Learning rate for Q-updates
-        
-    Returns:
-        List of episode results
     """
     agent = BanditAgent(num_arms=num_arms, epsilon=epsilon, learning_rate=learning_rate)
     results = []
@@ -165,26 +125,27 @@ def train_bandit_agent(env, num_episodes: int = 50, num_arms: int = 10,
         episode_recalls = []
         
         while not done:
-            # Get available actions
             available_actions = env.get_available_actions()
-            
-            # Select action using bandit
             action = agent.select_action(state, available_actions)
             
-            # Step environment
             next_state, reward, done, info = env.step(action)
             
-            # Update bandit
             arm = agent.get_arm_for_item(action)
             agent.update(arm, reward)
             
-            # Track results
-            episode_rewards.append(reward)
-            episode_recalls.append(info['recalled'])
+            # === PATCH: Support both synthetic + real environments ===
+            if "correct" in info:
+                # Real Duolingo environment
+                recall_flag = info["correct"]
+            else:
+                # Synthetic environment
+                recall_flag = info.get("recalled", 0)
+            episode_recalls.append(recall_flag)
+            # ==========================================================
             
+            episode_rewards.append(reward)
             state = next_state
         
-        # Calculate metrics
         total_reviews = len(episode_recalls)
         recall_rate = sum(episode_recalls) / total_reviews if total_reviews > 0 else 0.0
         cumulative_reward = sum(episode_rewards)
@@ -205,4 +166,3 @@ def train_bandit_agent(env, num_episodes: int = 50, num_arms: int = 10,
         'agent': agent,
         'results': results
     }
-
